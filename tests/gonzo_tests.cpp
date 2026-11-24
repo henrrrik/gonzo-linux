@@ -463,25 +463,36 @@ private slots:
             next = scroller.advance(0.016, next, 2000.0, 1.0);
         QCOMPARE(next, 360.0);
 
-        // 3. Touchpad tracks 1:1 on ScrollUpdate and coasts on ScrollEnd.
-        scroller.handleWheel(200.0, 2000.0, 0.0, 0.0, Qt::ScrollBegin, 120.0, 1.0);
-        y = scroller.handleWheel(200.0, 2000.0, -30.0, 0.0, Qt::ScrollUpdate, 120.0, 1.0);
-        QCOMPARE(y, 230.0);
+        // 3. Touchpad applies delta on ScrollBegin, tracks 1:1 on ScrollUpdate,
+        // preserves flick momentum across a tiny lift-off frame, and coasts generously.
+        y = scroller.handleWheel(200.0, 5000.0, -24.0, 0.0, Qt::ScrollBegin, 120.0, 1.0, 100);
+        QCOMPARE(y, 224.0);
+        y = scroller.handleWheel(y, 5000.0, -32.0, 0.0, Qt::ScrollUpdate, 120.0, 1.0, 116);
+        QCOMPARE(y, 256.0);
+        y = scroller.handleWheel(y, 5000.0, -30.0, 0.0, Qt::ScrollUpdate, 120.0, 1.0, 132);
+        QCOMPARE(y, 286.0);
+        // Tiny trailing lift-off frame must not kill the flick momentum.
+        y = scroller.handleWheel(y, 5000.0, -2.0, 0.0, Qt::ScrollUpdate, 120.0, 1.0, 148);
+        QCOMPARE(y, 288.0);
         QVERIFY(!scroller.isActive());
-        scroller.handleWheel(y, 2000.0, 0.0, 0.0, Qt::ScrollEnd, 120.0, 1.0);
+        scroller.handleWheel(y, 5000.0, 0.0, 0.0, Qt::ScrollEnd, 120.0, 1.0, 160);
         QVERIFY(scroller.isActive());
         qreal coasted = y;
-        for (int i = 0; i < 200 && scroller.isActive(); ++i)
-            coasted = scroller.advance(0.016, coasted, 2000.0, 1.0);
-        QVERIFY(coasted > y);
+        for (int i = 0; i < 300 && scroller.isActive(); ++i)
+            coasted = scroller.advance(0.016, coasted, 5000.0, 1.0);
+        QVERIFY(coasted - y > 400.0);
+        QVERIFY(!scroller.isActive());
+
+        // 3b. Holding fingers still on the pad (>110ms) before lifting does not coast.
+        y = scroller.handleWheel(1000.0, 5000.0, -30.0, 0.0, Qt::ScrollBegin, 120.0, 1.0, 500);
+        scroller.handleWheel(y, 5000.0, 0.0, 0.0, Qt::ScrollEnd, 120.0, 1.0, 680);
         QVERIFY(!scroller.isActive());
 
         // 4. Compositor ScrollMomentum cancels synthetic coast and applies 1:1.
-        scroller.handleWheel(500.0, 2000.0, 0.0, 0.0, Qt::ScrollBegin, 120.0, 1.0);
-        y = scroller.handleWheel(500.0, 2000.0, -40.0, 0.0, Qt::ScrollUpdate, 120.0, 1.0);
-        scroller.handleWheel(y, 2000.0, 0.0, 0.0, Qt::ScrollEnd, 120.0, 1.0);
+        y = scroller.handleWheel(500.0, 5000.0, -40.0, 0.0, Qt::ScrollBegin, 120.0, 1.0, 1000);
+        scroller.handleWheel(y, 5000.0, 0.0, 0.0, Qt::ScrollEnd, 120.0, 1.0, 1016);
         QVERIFY(scroller.isActive());
-        y = scroller.handleWheel(y, 2000.0, -15.0, 0.0, Qt::ScrollMomentum, 120.0, 1.0);
+        y = scroller.handleWheel(y, 5000.0, -15.0, 0.0, Qt::ScrollMomentum, 120.0, 1.0, 1024);
         QCOMPARE(y, 555.0);
         QVERIFY(!scroller.isActive());
 

@@ -2,14 +2,19 @@
 
 #include <QElapsedTimer>
 #include <QObject>
+#include <QPointer>
+#include <QTimer>
+#include <deque>
+
+class QQuickWindow;
 
 // Kinetic scroll physics for Flickable:
 // - Discrete mouse wheel notches drive a Chromium-style cubic-bezier impulse
 //   curve that inherits instantaneous velocity on mid-flight retargeting.
 // - Precision Wayland touchpads track 1:1 during ScrollBegin/ScrollUpdate,
-//   respect native ScrollMomentum without doubling inertia, and smoothly coast
-//   with exponential friction decay on ScrollEnd when the compositor does not
-//   emit momentum events.
+//   estimate release velocity over a rolling 90 ms sample window, respect
+//   native ScrollMomentum without doubling inertia, and smoothly coast with
+//   exponential friction decay on ScrollEnd (or idle release).
 class KineticScroller : public QObject {
     Q_OBJECT
     Q_PROPERTY(bool active READ isActive NOTIFY activeChanged)
@@ -21,9 +26,11 @@ public:
 
     // Handles a wheel/touchpad event and returns the immediate contentY to apply.
     // `phase` matches Qt::ScrollPhase (0=NoPhase, 1=Begin, 2=Update, 3=End, 4=Momentum).
+    // `timestampMs` is optional (negative uses internal monotonic clock; tests pass synthetic times).
     Q_INVOKABLE qreal handleWheel(qreal currentY, qreal maxY, qreal pixelDeltaY,
                                   qreal angleDeltaY, int phase, qreal stepPixels,
-                                  qreal devicePixelRatio = 1.0);
+                                  qreal devicePixelRatio = 1.0,
+                                  qint64 timestampMs = -1);
 
     // Advances active kinetic animation by `dtSeconds`, returning the snapped contentY.
     Q_INVOKABLE qreal advance(qreal dtSeconds, qreal currentY, qreal maxY,
@@ -32,8 +39,9 @@ public:
     // Stops any running wheel curve or touchpad coast immediately.
     Q_INVOKABLE void cancel();
 
-    // Installs a native QWheelEvent filter on a QML Flickable so true Wayland
-    // scroll phases (ScrollBegin/Update/End/Momentum) reach the physics engine.
+    // Installs native QWheelEvent filters on both the Flickable and its hosting
+    // QQuickWindow so zero-delta Wayland ScrollEnd (wl_pointer.axis_stop) events
+    // are never dropped before reaching the physics engine.
     Q_INVOKABLE void attachFlickable(QObject *flickable, qreal stepPixels = 120.0);
 
     static qreal snapToPixel(qreal y, qreal dpr);
@@ -49,7 +57,18 @@ protected:
 private:
     enum class Mode { Idle, WheelCurve, TouchpadCoast };
 
+    struct Sample {
+        qint64 timeMs = 0;
+        qreal delta = 0.0;
+    };
+
     void setMode(Mode mode);
+    void attachWindow(QQuickWindow *window);
+    void recordTouchSample(qreal delta, qint64 nowMs);
+    qreal releaseVelocity(qint64 nowMs) const;
+    void finishTouchpadGesture(qreal currentY, qint64 nowMs);
+    void handleIdleReleaseTimeout();
+
     void beginCurve(qreal from, qreal to, qreal duration, qreal initialSlope);
     void retargetCurve(qreal newTarget);
     static qreal wheelDuration(qreal distance);
@@ -75,10 +94,14 @@ private:
     // Touchpad gesture tracking & synthetic coast state.
     bool m_touchpadActive = false;
     bool m_sawCompositorMomentum = false;
-    qreal m_touchVelocity = 0.0;
+    std::deque<Sample> m_samples;
     qreal m_coastVelocity = 0.0;
     qreal m_coastY = 0.0;
-    QElapsedTimer m_gestureClock;
-    QObject *m_flickable = nullptr;
+    QElapsedTimer m_clock;
+    QTimer m_idleReleaseTimer;
+
+    QPointer<QObject> m_flickable;
+    QPointer<QQuickWindow> m_window;
     qreal m_stepPixels = 120.0;
+    bool m_debugScroll = false;
 };
