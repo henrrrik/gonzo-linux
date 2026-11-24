@@ -565,12 +565,193 @@ private slots:
         QCOMPARE(Cli::run({QStringLiteral("gonzo"), QStringLiteral("check"), QStringLiteral("--json"), doc}, &out, &err), 0);
         QCOMPARE(QJsonDocument::fromJson(out.toUtf8()).object().value(QStringLiteral("ok")).toBool(), true);
 
+        out.clear(); err.clear();
+        const QString paraDoc = dir.filePath(QStringLiteral("paras.md"));
+        QVERIFY(writeBytes(paraDoc, "line one\nline two\n\nsecond paragraph\r\ncontinued\n\n\nthird\n"));
+        QCOMPARE(Cli::run({QStringLiteral("gonzo"), QStringLiteral("stats"), QStringLiteral("--json"), paraDoc}, &out, &err), 0);
+        const QJsonObject paraStats = QJsonDocument::fromJson(out.toUtf8()).object();
+        QCOMPARE(paraStats.value(QStringLiteral("paragraphs")).toInt(), 3);
+
         const QString fakeHome = dir.filePath(QStringLiteral("home"));
         QDir().mkpath(fakeHome + QStringLiteral("/.claude"));
         out.clear(); err.clear();
         QCOMPARE(Cli::run({QStringLiteral("gonzo"), QStringLiteral("skill"), QStringLiteral("install")}, &out, &err, fakeHome), 0);
         QVERIFY(QFileInfo::exists(fakeHome + QStringLiteral("/.agents/skills/gonzo/SKILL.md")));
         QVERIFY(QFileInfo(fakeHome + QStringLiteral("/.claude/skills/gonzo")).isSymLink());
+    }
+
+    // --- Review regression tests ---
+
+    void openWhileModifiedPromptsAndPreservesDraft() {
+        QTemporaryDir dir;
+        const QString stateDir = dir.filePath(QStringLiteral("state"));
+        const QString other = dir.filePath(QStringLiteral("other.md"));
+        QVERIFY(writeBytes(other, "Other file"));
+
+        Theme theme(dir.filePath(QStringLiteral("theme")));
+        FakeFilePicker picker;
+        Backend backend(&theme, &picker, nullptr, stateDir, dir.filePath(QStringLiteral("config")));
+        QTextDocument doc;
+        backend.attachQTextDocument(&doc);
+
+        doc.setPlainText(QStringLiteral("Unsaved draft"));
+        backend.flushRecoveryNow();
+        QVERIFY(backend.modified());
+
+        QSignalSpy unsavedSpy(&backend, &Backend::unsavedChangesRequested);
+        QVERIFY(!backend.openFile(other));
+        QCOMPARE(unsavedSpy.count(), 1);
+        QCOMPARE(backend.documentText(), QStringLiteral("Unsaved draft"));
+        QVERIFY(!QDir(stateDir + QStringLiteral("/recovery")).entryList({QStringLiteral("*.md")}, QDir::Files).isEmpty());
+
+        // Cancelling keeps edits and recovery draft intact.
+        backend.cancelPendingAction();
+        QCOMPARE(backend.documentText(), QStringLiteral("Unsaved draft"));
+
+        // Confirming discard opens the requested file cleanly.
+        QVERIFY(!backend.openFile(other));
+        backend.confirmDiscardAndProceed();
+        QCOMPARE(backend.documentText(), QStringLiteral("Other file"));
+        QVERIFY(!backend.modified());
+    }
+
+    void crlfFileReplaceAllAndNbspPreservation() {
+        QTemporaryDir dir;
+        const QString crlfFile = dir.filePath(QStringLiteral("win.md"));
+        QVERIFY(writeBytes(crlfFile, "alpha\r\nbeta\r\nalpha\u00A0gamma\r\n"));
+
+        Theme theme(dir.filePath(QStringLiteral("theme")));
+        Backend backend(&theme, nullptr, nullptr,
+                        dir.filePath(QStringLiteral("state")),
+                        dir.filePath(QStringLiteral("config")));
+        QTextDocument doc;
+        backend.attachQTextDocument(&doc);
+
+        QVERIFY(backend.openFile(crlfFile));
+        const QVariantMap found = backend.setSearchQuery(QStringLiteral("alpha"), 0);
+        QCOMPARE(found.value(QStringLiteral("found")).toBool(), true);
+        QCOMPARE(backend.searchMatchCount(), 2);
+        QCOMPARE(backend.replaceAll(QStringLiteral("OMEGA")), 2);
+        QCOMPARE(backend.documentText(), QStringLiteral("OMEGA\nbeta\nOMEGA\u00A0gamma\n"));
+
+        // Saving preserves CRLF line endings and NBSP.
+        QVERIFY(backend.save());
+        QFile raw(crlfFile);
+        QVERIFY(raw.open(QIODevice::ReadOnly));
+        QCOMPARE(raw.readAll(), QByteArray("OMEGA\r\nbeta\r\nOMEGA\xC2\xA0gamma\r\n"));
+
+        // Fallback bulk path (setPlainText) also preserves NBSP.
+        doc.setPlainText(QStringLiteral("keep\u00A0nbsp"));
+        QCOMPARE(backend.documentText(), QStringLiteral("keep\u00A0nbsp"));
+    }
+
+    void zoomPreservesUndoStackAndSinglePassLoadHighlight() {
+        QTemporaryDir dir;
+        const QString file = dir.filePath(QStringLiteral("doc.md"));
+        QVERIFY(writeBytes(file, "# Heading\n\nLine one\n\nLine two\n"));
+
+        Theme theme(dir.filePath(QStringLiteral("theme")));
+        Backend backend(&theme, nullptr, nullptr,
+                        dir.filePath(QStringLiteral("state")),
+                        dir.filePath(QStringLiteral("config")));
+        QTextDocument doc;
+        backend.attachQTextDocument(&doc);
+
+        backend.highlighter()->resetHighlightBlockCount();
+        QVERIFY(backend.openFile(file));
+        QCoreApplication::processEvents();
+        const int blocks = doc.blockCount();
+        // Load must highlight the document only once (not 3x).
+        QCOMPARE(backend.highlighter()->highlightBlockCount(), blocks);
+
+        // Apply an edit, zoom in/out, and confirm Undo still reverts it.
+        backend.applyBold(11, 19);
+        QVERIFY(backend.documentText().contains(QStringLiteral("**Line one**")));
+        backend.highlighter()->resetHighlightBlockCount();
+        backend.increaseTextSize();
+        QCOMPARE(backend.highlighter()->highlightBlockCount(), blocks);
+        backend.decreaseTextSize();
+        QVERIFY(doc.isUndoAvailable());
+        doc.undo();
+        QVERIFY(!backend.documentText().contains(QStringLiteral("**Line one**")));
+    }
+
+    void findNextAndEditsOnlyRehighlightAffectedBlocks() {
+        QTemporaryDir dir;
+        Theme theme(dir.filePath(QStringLiteral("theme")));
+        Backend backend(&theme, nullptr, nullptr,
+                        dir.filePath(QStringLiteral("state")),
+                        dir.filePath(QStringLiteral("config")));
+        QTextDocument doc;
+        backend.attachQTextDocument(&doc);
+
+        QString body;
+        for (int i = 0; i < 40; ++i)
+            body += QStringLiteral("Paragraph %1 with target word.\n").arg(i);
+        doc.setPlainText(body);
+
+        backend.setSearchQuery(QStringLiteral("target"), 0);
+        QCOMPARE(backend.searchMatchCount(), 40);
+
+        backend.highlighter()->resetHighlightBlockCount();
+        backend.findNext();
+        // Stepping to next match only re-highlights the old/new match blocks
+        // (and Qt's adjacent state check), staying O(1) instead of all 40 blocks.
+        QVERIFY2(backend.highlighter()->highlightBlockCount() <= 4,
+                 qPrintable(QStringLiteral("Rehighlighted %1 blocks").arg(backend.highlighter()->highlightBlockCount())));
+    }
+
+    void unreadableRecoveryDraftIsNotDeleted() {
+        QTemporaryDir dir;
+        const QString stateDir = dir.filePath(QStringLiteral("state"));
+        const QString recDir = stateDir + QStringLiteral("/recovery");
+        QDir().mkpath(recDir);
+        const QString badDraft = recDir + QStringLiteral("/draft1.md");
+        const QString badMeta = recDir + QStringLiteral("/draft1.json");
+        // Non-UTF-8 bytes cause readFile to fail; draft must be preserved, not deleted.
+        QVERIFY(writeBytes(badDraft, QByteArray("\xFF\xFE\x01\x02")));
+        QVERIFY(writeBytes(badMeta, "{}"));
+
+        DocumentStore store(stateDir);
+        QVERIFY(!store.takeRecoverableDraft().has_value());
+        QVERIFY(QFileInfo::exists(badDraft));
+        QVERIFY(QFileInfo::exists(badMeta));
+    }
+
+    void spellCheckerHandlesNonUtf8DictionaryEncoding() {
+        QTemporaryDir dir;
+        QVERIFY(writeBytes(dir.filePath(QStringLiteral("fr_FR.aff")), "SET ISO8859-1\n"));
+        // "café" in ISO-8859-1 is "caf\xE9"
+        QVERIFY(writeBytes(dir.filePath(QStringLiteral("fr_FR.dic")), QByteArray("1\ncaf\xE9\n")));
+
+        SpellChecker checker(QStringLiteral("fr_FR"), {dir.path()});
+        QVERIFY(checker.isAvailable());
+        QVERIFY(!checker.isMisspelled(QStringLiteral("café")));
+        QVERIFY(checker.isMisspelled(QStringLiteral("cafx")));
+        QVERIFY(checker.suggestions(QStringLiteral("cafx")).contains(QStringLiteral("café")));
+    }
+
+    void cancelledSaveDoesNotQuitOnSubsequentSave() {
+        QTemporaryDir dir;
+        Theme theme(dir.filePath(QStringLiteral("theme")));
+        FakeFilePicker picker;
+        Backend backend(&theme, &picker, nullptr,
+                        dir.filePath(QStringLiteral("state")),
+                        dir.filePath(QStringLiteral("config")));
+        QTextDocument doc;
+        backend.attachQTextDocument(&doc);
+        doc.setPlainText(QStringLiteral("Draft"));
+
+        QSignalSpy closeSpy(&backend, &Backend::closeApproved);
+        backend.requestClose();
+        // User chooses Save in Unsaved Changes dialog, then cancels the picker.
+        backend.confirmSaveAndProceed();
+        emit picker.cancelled(true);
+
+        // A later explicit Save As must NOT close the app.
+        picker.nextSaveUrl = QUrl::fromLocalFile(dir.filePath(QStringLiteral("saved.md")));
+        backend.save();
+        QCOMPARE(closeSpy.count(), 0);
     }
 
     void qmlLoadsCleanlyOffscreen() {

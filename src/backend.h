@@ -5,6 +5,7 @@
 #include "spellchecker.h"
 #include "textmetrics.h"
 
+#include <QElapsedTimer>
 #include <QFileSystemWatcher>
 #include <QFont>
 #include <QList>
@@ -15,6 +16,7 @@
 #include <QTimer>
 #include <QUrl>
 #include <QVariantMap>
+#include <cstdint>
 #include <memory>
 
 class FilePicker;
@@ -93,7 +95,7 @@ public:
 
     Q_INVOKABLE void newWindow();
     Q_INVOKABLE void openDialog();
-    Q_INVOKABLE bool openFile(const QString &path);
+    Q_INVOKABLE bool openFile(const QString &path, bool force = false);
     Q_INVOKABLE bool openOrStartFile(const QString &path);
     Q_INVOKABLE bool save();
     Q_INVOKABLE void saveAsDialog();
@@ -102,9 +104,12 @@ public:
     Q_INVOKABLE void printDocument();
 
     Q_INVOKABLE void requestClose();
-    Q_INVOKABLE void confirmDiscardAndClose();
-    Q_INVOKABLE void confirmSaveAndClose();
-    Q_INVOKABLE void cancelPendingClose();
+    Q_INVOKABLE void confirmDiscardAndProceed();
+    Q_INVOKABLE void confirmSaveAndProceed();
+    Q_INVOKABLE void cancelPendingAction();
+    Q_INVOKABLE void confirmDiscardAndClose() { confirmDiscardAndProceed(); }
+    Q_INVOKABLE void confirmSaveAndClose() { confirmSaveAndProceed(); }
+    Q_INVOKABLE void cancelPendingClose() { cancelPendingAction(); }
     Q_INVOKABLE void keepLocalVersion();
 
     // Smart Markdown editing commands (each is a single Undo step).
@@ -178,8 +183,17 @@ private slots:
     void handlePickerFailed(const QString &message, bool forSave);
 
 private:
+    enum class PendingAction { None, Close, OpenDialog, OpenPath };
+
     void loadTextIntoDocument(const QString &text);
-    void applyDocumentBaseTypography();
+    void applyBlockMargins();
+    void applyZoomFont();
+    void openDialogNow();
+    bool openFileNow(const QString &path);
+    void executePendingAction();
+    QByteArray serializedBytes() const;
+    void recordFileStat(const QString &path);
+    void scheduleDirtyTimers();
     QVariantMap applyMutation(const TextMutation &mutation);
     bool checkSizeDelta(int removeStart, int removeLen, const QString &replacement);
     void setStatus(const QString &text, bool isError = false);
@@ -187,10 +201,12 @@ private:
     void watchCurrentFile();
     void unwatchCurrentFile();
     void refreshSearchMatches(int anchorPos, bool keepIndex = false);
+    void updateSearchMatchesForEdit(int position, int charsRemoved, int charsAdded);
     QVariantMap currentMatchMap() const;
     QString settingsPath() const;
     void loadSettings();
-    void saveSettings() const;
+    void scheduleSaveSettings();
+    void saveSettingsNow() const;
     QFont baseFont() const;
 
     Theme *m_theme = nullptr;
@@ -207,18 +223,24 @@ private:
     QString m_cachedText;
     TextMetrics m_metrics;
     qint64 m_utf8Bytes = 0;
+    bool m_usesCrlf = false;
     QByteArray m_baselineSha256;
     QByteArray m_recordedBaseline;
     bool m_hasConflictBaseline = false;
+    qint64 m_knownFileSize = -1;
+    qint64 m_knownFileMtimeMs = -1;
+    uint64_t m_ioGeneration = 0;
+    uint64_t m_editRevision = 0;
 
     bool m_modified = false;
     bool m_loading = false;
     bool m_handledContentsChange = false;
-    bool m_undoingOversized = false;
+    bool m_revertingOversized = false;
     bool m_conflictPending = false;
     bool m_autoSaveSuspended = false;
-    bool m_closePending = false;
-    bool m_closeAfterSave = false;
+    PendingAction m_pendingAction = PendingAction::None;
+    QString m_pendingOpenPath;
+    bool m_resumePendingAfterSave = false;
 
     QString m_statusText;
     bool m_statusIsError = false;
@@ -234,7 +256,10 @@ private:
     int m_currentSearchIndex = -1;
 
     QTimer m_autoSaveTimer;
+    QElapsedTimer m_autoSaveFirstDirty;
     QTimer m_recoveryTimer;
+    QElapsedTimer m_recoveryFirstDirty;
+    QTimer m_settingsSaveTimer;
     QFileSystemWatcher m_fileWatcher;
     QTimer m_fileCheckTimer;
 };

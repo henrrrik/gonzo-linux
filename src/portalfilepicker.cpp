@@ -191,6 +191,7 @@ void PortalFilePicker::clearPending() {
 }
 
 void PortalFilePicker::closePendingRequest() {
+    const Action prevAction = m_pendingAction;
     if (m_pendingWatcher) {
         m_pendingWatcher->deleteLater();
         m_pendingWatcher = nullptr;
@@ -204,6 +205,8 @@ void PortalFilePicker::closePendingRequest() {
         m_bus.asyncCall(closeMsg);
     }
     clearPending();
+    if (prevAction != Action::None)
+        emit cancelled(prevAction == Action::Save);
 }
 
 void PortalFilePicker::handleResponse(uint response, const QVariantMap &results) {

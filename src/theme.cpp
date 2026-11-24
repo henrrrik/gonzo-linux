@@ -16,6 +16,11 @@
 #include <QStandardPaths>
 #include <QTextStream>
 #include <cmath>
+#include <cstring>
+#include <fcntl.h>
+#include <sys/socket.h>
+#include <sys/un.h>
+#include <unistd.h>
 
 namespace {
 
@@ -117,16 +122,90 @@ Theme::Theme(const QString &directory, QObject *parent, const QString &hyprctl)
     });
     m_roundingPoll.setInterval(1000);
     connect(&m_roundingPoll, &QTimer::timeout, this, &Theme::refreshRounding);
-    if (!m_hyprctl.isEmpty())
+    if (!hyprctl.isEmpty()) {
+        // Explicit custom hyprctl (e.g. tests) has no Hyprland event socket.
         m_roundingPoll.start();
+    } else if (!m_hyprctl.isEmpty()) {
+        // Listen to Hyprland's event socket (.socket2.sock) for configreloaded
+        // instead of spawning hyprctl every second.
+        connectHyprlandEventSocket();
+    }
     reload();
 }
 
 Theme::~Theme() {
+    m_hyprEventNotifier.reset();
+    if (m_hyprEventFd >= 0) {
+        ::close(m_hyprEventFd);
+        m_hyprEventFd = -1;
+    }
     if (m_roundingProcess.state() != QProcess::NotRunning) {
         m_roundingProcess.kill();
         m_roundingProcess.waitForFinished(1000);
     }
+}
+
+void Theme::connectHyprlandEventSocket() {
+    const QString sig = qEnvironmentVariable("HYPRLAND_INSTANCE_SIGNATURE");
+    const QString runtime = qEnvironmentVariable("XDG_RUNTIME_DIR");
+    if (sig.isEmpty() || runtime.isEmpty())
+        return;
+
+    const QByteArray sockPath = QFile::encodeName(
+        runtime + QStringLiteral("/hypr/") + sig + QStringLiteral("/.socket2.sock"));
+    if (static_cast<size_t>(sockPath.size()) >= sizeof(sockaddr_un::sun_path))
+        return;
+
+    const int fd = ::socket(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
+    if (fd < 0)
+        return;
+
+    struct sockaddr_un addr {};
+    addr.sun_family = AF_UNIX;
+    std::memcpy(addr.sun_path, sockPath.constData(), static_cast<size_t>(sockPath.size()));
+
+    if (::connect(fd, reinterpret_cast<struct sockaddr *>(&addr), sizeof(addr)) != 0
+        && errno != EINPROGRESS) {
+        ::close(fd);
+        return;
+    }
+
+    m_hyprEventFd = fd;
+    m_hyprEventNotifier = std::make_unique<QSocketNotifier>(fd, QSocketNotifier::Read, this);
+    connect(m_hyprEventNotifier.get(), &QSocketNotifier::activated,
+            this, &Theme::handleHyprlandEventSocket);
+}
+
+void Theme::handleHyprlandEventSocket() {
+    if (m_hyprEventFd < 0)
+        return;
+    char buf[1024];
+    for (;;) {
+        const ssize_t n = ::read(m_hyprEventFd, buf, sizeof(buf));
+        if (n > 0) {
+            m_hyprEventBuffer.append(buf, static_cast<qsizetype>(n));
+        } else if (n == 0) {
+            m_hyprEventNotifier.reset();
+            ::close(m_hyprEventFd);
+            m_hyprEventFd = -1;
+            break;
+        } else {
+            break;
+        }
+    }
+
+    bool shouldRefresh = false;
+    int nl = -1;
+    while ((nl = m_hyprEventBuffer.indexOf('\n')) >= 0) {
+        const QByteArray line = m_hyprEventBuffer.left(nl);
+        m_hyprEventBuffer.remove(0, nl + 1);
+        if (line.startsWith("configreloaded>>"))
+            shouldRefresh = true;
+    }
+    if (m_hyprEventBuffer.size() > 8192)
+        m_hyprEventBuffer.clear();
+    if (shouldRefresh)
+        refreshRounding();
 }
 
 void Theme::refreshRounding() {

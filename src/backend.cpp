@@ -7,6 +7,7 @@
 
 #include <QClipboard>
 #include <QCoreApplication>
+#include <QDateTime>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -23,12 +24,26 @@
 #include <QTextBlockFormat>
 #include <QTextCursor>
 #include <QTextDocument>
+#include <QThreadPool>
 #include <algorithm>
 #include <cmath>
 
 namespace {
 constexpr int kAutoSaveDelayMs = 10000;
+constexpr int kAutoSaveMaxWaitMs = 30000;
 constexpr int kRecoveryDelayMs = 2000;
+constexpr int kRecoveryMaxWaitMs = 10000;
+constexpr int kSettingsSaveDelayMs = 300;
+
+// Extract text from QTextDocument without toPlainText()'s NBSP->space rewrite.
+QString rawDocumentText(const QTextDocument *doc) {
+    if (!doc)
+        return {};
+    QString raw = doc->toRawText();
+    raw.replace(QChar(0x2029), QLatin1Char('\n'));
+    raw.replace(QChar(0x2028), QLatin1Char('\n'));
+    return raw;
+}
 } // namespace
 
 Backend::Backend(Theme *theme, FilePicker *filePicker, Printer *printer,
@@ -53,12 +68,14 @@ Backend::Backend(Theme *theme, FilePicker *filePicker, Printer *printer,
     m_recentFiles = m_store.recentFiles();
 
     m_autoSaveTimer.setSingleShot(true);
-    m_autoSaveTimer.setInterval(kAutoSaveDelayMs);
     connect(&m_autoSaveTimer, &QTimer::timeout, this, &Backend::handleAutoSaveTimer);
 
     m_recoveryTimer.setSingleShot(true);
-    m_recoveryTimer.setInterval(kRecoveryDelayMs);
     connect(&m_recoveryTimer, &QTimer::timeout, this, &Backend::handleRecoveryTimer);
+
+    m_settingsSaveTimer.setSingleShot(true);
+    m_settingsSaveTimer.setInterval(kSettingsSaveDelayMs);
+    connect(&m_settingsSaveTimer, &QTimer::timeout, this, [this] { saveSettingsNow(); });
 
     m_fileCheckTimer.setSingleShot(true);
     m_fileCheckTimer.setInterval(120);
@@ -84,6 +101,10 @@ Backend::Backend(Theme *theme, FilePicker *filePicker, Printer *printer,
 }
 
 Backend::~Backend() {
+    if (m_settingsSaveTimer.isActive()) {
+        m_settingsSaveTimer.stop();
+        saveSettingsNow();
+    }
     if (!m_modified)
         m_store.clearRecoveryDraft();
 }
@@ -143,7 +164,8 @@ void Backend::attachQTextDocument(QTextDocument *doc) {
     m_document->setDocumentMargin(0);
     m_document->setDefaultFont(baseFont());
 
-    m_highlighter = new MarkdownHighlighter(m_document);
+    m_highlighter = new MarkdownHighlighter(nullptr);
+    m_highlighter->setParent(m_document);
     m_highlighter->setBaseFont(baseFont());
     if (m_theme)
         m_highlighter->setTheme(m_theme);
@@ -155,26 +177,34 @@ void Backend::attachQTextDocument(QTextDocument *doc) {
     if (!m_cachedText.isEmpty()) {
         loadTextIntoDocument(m_cachedText);
     } else {
-        applyDocumentBaseTypography();
+        applyBlockMargins();
+        m_highlighter->setDocument(m_document);
     }
 }
 
 void Backend::loadTextIntoDocument(const QString &text) {
-    m_cachedText = text;
+    m_cachedText = EditorCommands::normalize(text);
     m_metrics.reset(m_cachedText);
     m_utf8Bytes = m_cachedText.toUtf8().size();
 
     if (m_document) {
         m_loading = true;
+        // Detach highlighter while loading and applying block margins so the
+        // document is highlighted exactly once instead of three times.
+        if (m_highlighter)
+            m_highlighter->setDocument(nullptr);
+
         m_document->setUndoRedoEnabled(false);
         m_document->setPlainText(m_cachedText);
-        applyDocumentBaseTypography();
+        m_document->setDefaultFont(baseFont());
+        applyBlockMargins();
         m_document->setUndoRedoEnabled(true);
         m_document->clearUndoRedoStacks();
         m_document->setModified(false);
-        m_loading = false;
+
         if (m_highlighter)
-            m_highlighter->rehighlight();
+            m_highlighter->setDocument(m_document);
+        m_loading = false;
     }
 
     if (!m_searchQuery.isEmpty())
@@ -182,12 +212,9 @@ void Backend::loadTextIntoDocument(const QString &text) {
     emit wordCountChanged();
 }
 
-void Backend::applyDocumentBaseTypography() {
+void Backend::applyBlockMargins() {
     if (!m_document)
         return;
-    const QFont f = baseFont();
-    m_document->setDefaultFont(f);
-
     const bool wasLoading = m_loading;
     m_loading = true;
     const bool undoEnabled = m_document->isUndoRedoEnabled();
@@ -202,9 +229,33 @@ void Backend::applyDocumentBaseTypography() {
 
     m_document->setUndoRedoEnabled(undoEnabled);
     m_loading = wasLoading;
+}
 
+void Backend::applyZoomFont() {
+    if (!m_document)
+        return;
+    // Proportional line height and bottom margin do not depend on font size,
+    // so zoom never touches block formats or setUndoRedoEnabled (preserving Undo).
+    const QFont f = baseFont();
+    m_document->setDefaultFont(f);
     if (m_highlighter)
         m_highlighter->setBaseFont(f);
+}
+
+void Backend::scheduleDirtyTimers() {
+    // Enforce max-wait ceilings so continuous typing without pauses still
+    // persists recovery drafts (<=10 s) and autosaves (<=30 s).
+    if (!m_recoveryFirstDirty.isValid())
+        m_recoveryFirstDirty.start();
+    const int recoveryRemaining = std::max(0, kRecoveryMaxWaitMs - static_cast<int>(m_recoveryFirstDirty.elapsed()));
+    m_recoveryTimer.start(std::min(kRecoveryDelayMs, recoveryRemaining));
+
+    if (!m_filePath.isEmpty() && !m_autoSaveSuspended && !m_conflictPending) {
+        if (!m_autoSaveFirstDirty.isValid())
+            m_autoSaveFirstDirty.start();
+        const int autoRemaining = std::max(0, kAutoSaveMaxWaitMs - static_cast<int>(m_autoSaveFirstDirty.elapsed()));
+        m_autoSaveTimer.start(std::min(kAutoSaveDelayMs, autoRemaining));
+    }
 }
 
 void Backend::handleContentsChange(int position, int charsRemoved, int charsAdded) {
@@ -224,6 +275,7 @@ void Backend::handleContentsChange(int position, int charsRemoved, int charsAdde
         cursor.setPosition(safeEnd, QTextCursor::KeepAnchor);
         inserted = cursor.selectedText();
         inserted.replace(QChar(0x2029), QLatin1Char('\n'));
+        inserted.replace(QChar(0x2028), QLatin1Char('\n'));
     }
 
     const int docLen = std::max(0, m_document->characterCount() - 1);
@@ -239,33 +291,49 @@ void Backend::handleContentsChange(int position, int charsRemoved, int charsAdde
         m_utf8Bytes += addedBytes - removedBytes;
         m_metrics.applyEdit(m_cachedText, position, charsRemoved, static_cast<int>(inserted.size()));
     } else {
-        m_cachedText = m_document->toPlainText();
+        m_cachedText = rawDocumentText(m_document);
         m_utf8Bytes = m_cachedText.toUtf8().size();
         m_metrics.reset(m_cachedText);
     }
 
-    if (m_utf8Bytes > DocumentStore::kMaxFileBytes && !m_undoingOversized) {
-        m_undoingOversized = true;
+    if (m_utf8Bytes > DocumentStore::kMaxFileBytes && !m_revertingOversized) {
+        m_revertingOversized = true;
         setStatus(tr("This document exceeds Gonzo's 16 MB limit."), true);
-        QMetaObject::invokeMethod(this, [this] {
-            if (m_document && m_document->isUndoAvailable())
-                m_document->undo();
-            m_undoingOversized = false;
+        const int removePos = position;
+        const int removeLen = static_cast<int>(inserted.size());
+        // Remove only the offending insertion instead of undo(), which would
+        // wipe an entire coalesced typing run.
+        QMetaObject::invokeMethod(this, [this, removePos, removeLen] {
+            if (m_document && removeLen > 0) {
+                const int maxPos = std::max(0, m_document->characterCount() - 1);
+                const int s = std::clamp(removePos, 0, maxPos);
+                const int e = std::clamp(removePos + removeLen, s, maxPos);
+                if (e > s) {
+                    QTextCursor cursor(m_document);
+                    cursor.setPosition(s);
+                    cursor.setPosition(e, QTextCursor::KeepAnchor);
+                    cursor.removeSelectedText();
+                }
+            }
+            m_revertingOversized = false;
         }, Qt::QueuedConnection);
         return;
     }
 
+    ++m_editRevision;
     emit wordCountChanged();
     setModified(true);
     if (!m_conflictPending)
         setStatus(tr("Markdown"));
 
-    m_recoveryTimer.start();
-    if (!m_filePath.isEmpty() && !m_autoSaveSuspended && !m_conflictPending)
-        m_autoSaveTimer.start();
+    scheduleDirtyTimers();
 
-    if (!m_searchQuery.isEmpty())
-        refreshSearchMatches(position, true);
+    if (!m_searchQuery.isEmpty()) {
+        if (incrementalValid)
+            updateSearchMatchesForEdit(position, charsRemoved, static_cast<int>(inserted.size()));
+        else
+            refreshSearchMatches(position, true);
+    }
 }
 
 void Backend::handleContentsChanged() {
@@ -280,16 +348,15 @@ void Backend::handleContentsChanged() {
 
     // Fallback for bulk QTextDocument operations like setPlainText()/clear()
     // that emit contentsChanged() without contentsChange(pos, removed, added).
-    m_cachedText = m_document->toPlainText();
+    m_cachedText = rawDocumentText(m_document);
     m_utf8Bytes = m_cachedText.toUtf8().size();
     m_metrics.reset(m_cachedText);
+    ++m_editRevision;
     emit wordCountChanged();
     setModified(true);
     if (!m_conflictPending)
         setStatus(tr("Markdown"));
-    m_recoveryTimer.start();
-    if (!m_filePath.isEmpty() && !m_autoSaveSuspended && !m_conflictPending)
-        m_autoSaveTimer.start();
+    scheduleDirtyTimers();
     if (!m_searchQuery.isEmpty())
         refreshSearchMatches(0, false);
 }
@@ -311,6 +378,10 @@ void Backend::setModified(bool modified) {
     if (m_modified == modified)
         return;
     m_modified = modified;
+    if (!m_modified) {
+        m_recoveryFirstDirty.invalidate();
+        m_autoSaveFirstDirty.invalidate();
+    }
     emit modifiedChanged();
     emit documentChanged();
 }
@@ -322,6 +393,16 @@ void Backend::newWindow() {
 }
 
 void Backend::openDialog() {
+    if (m_modified) {
+        m_pendingAction = PendingAction::OpenDialog;
+        m_pendingOpenPath.clear();
+        emit unsavedChangesRequested();
+        return;
+    }
+    openDialogNow();
+}
+
+void Backend::openDialogNow() {
     if (!m_filePicker) {
         setStatus(tr("File chooser is unavailable."), true);
         return;
@@ -330,7 +411,17 @@ void Backend::openDialog() {
     m_filePicker->openDocument(folder);
 }
 
-bool Backend::openFile(const QString &path) {
+bool Backend::openFile(const QString &path, bool force) {
+    if (m_modified && !force) {
+        m_pendingAction = PendingAction::OpenPath;
+        m_pendingOpenPath = path;
+        emit unsavedChangesRequested();
+        return false;
+    }
+    return openFileNow(path);
+}
+
+bool Backend::openFileNow(const QString &path) {
     const ReadFileResult res = DocumentStore::readFile(path);
     if (!res.ok) {
         setStatus(res.error, true);
@@ -338,16 +429,21 @@ bool Backend::openFile(const QString &path) {
     }
 
     unwatchCurrentFile();
+    ++m_ioGeneration;
     m_autoSaveTimer.stop();
     m_recoveryTimer.stop();
+    m_autoSaveFirstDirty.invalidate();
+    m_recoveryFirstDirty.invalidate();
     m_store.clearRecoveryDraft();
 
     m_filePath = res.resolvedPath;
+    m_usesCrlf = res.text.contains(QStringLiteral("\r\n"));
     m_baselineSha256 = res.sha256;
     m_recordedBaseline = res.sha256;
     m_hasConflictBaseline = true;
     m_conflictPending = false;
     m_autoSaveSuspended = false;
+    recordFileStat(m_filePath);
 
     loadTextIntoDocument(res.text);
     setModified(false);
@@ -369,14 +465,17 @@ bool Backend::openOrStartFile(const QString &path) {
         return false;
     const QFileInfo info(path);
     if (info.exists())
-        return openFile(path);
+        return openFileNow(path);
 
-    // Starting a new named file from CLI: target path is recorded without writing until save.
     unwatchCurrentFile();
+    ++m_ioGeneration;
     m_filePath = DocumentStore::resolveTargetPath(path);
+    m_usesCrlf = false;
     m_baselineSha256.clear();
     m_recordedBaseline.clear();
     m_hasConflictBaseline = false;
+    m_knownFileSize = -1;
+    m_knownFileMtimeMs = -1;
     m_conflictPending = false;
     m_autoSaveSuspended = false;
     loadTextIntoDocument(QString());
@@ -385,6 +484,25 @@ bool Backend::openOrStartFile(const QString &path) {
     emit conflictChanged();
     emit documentChanged();
     return true;
+}
+
+QByteArray Backend::serializedBytes() const {
+    if (!m_usesCrlf)
+        return m_cachedText.toUtf8();
+    QString out = m_cachedText;
+    out.replace(QLatin1Char('\n'), QStringLiteral("\r\n"));
+    return out.toUtf8();
+}
+
+void Backend::recordFileStat(const QString &path) {
+    const QFileInfo info(path);
+    if (info.exists()) {
+        m_knownFileSize = info.size();
+        m_knownFileMtimeMs = info.lastModified().toMSecsSinceEpoch();
+    } else {
+        m_knownFileSize = -1;
+        m_knownFileMtimeMs = -1;
+    }
 }
 
 bool Backend::save() {
@@ -407,10 +525,11 @@ void Backend::saveAsDialog() {
 }
 
 bool Backend::saveToPath(const QString &path, bool isSaveAs) {
-    const QByteArray utf8 = m_cachedText.toUtf8();
+    const QByteArray utf8 = serializedBytes();
     const bool checkConflict = !isSaveAs && m_hasConflictBaseline;
 
     unwatchCurrentFile();
+    ++m_ioGeneration;
     const WriteFileResult res = DocumentStore::writeFile(
         path, utf8, checkConflict ? m_baselineSha256 : QByteArray(), checkConflict);
 
@@ -421,13 +540,14 @@ bool Backend::saveToPath(const QString &path, bool isSaveAs) {
             m_conflictPending = true;
             m_autoSaveSuspended = true;
             m_autoSaveTimer.stop();
+            m_autoSaveFirstDirty.invalidate();
             emit conflictChanged();
             setStatus(res.error, true);
             emit externalChangeDetected(false, m_modified);
         } else {
             setStatus(res.error, true);
         }
-        m_closeAfterSave = false;
+        m_resumePendingAfterSave = false;
         return false;
     }
 
@@ -439,7 +559,10 @@ bool Backend::saveToPath(const QString &path, bool isSaveAs) {
     m_autoSaveSuspended = false;
     m_autoSaveTimer.stop();
     m_recoveryTimer.stop();
+    m_autoSaveFirstDirty.invalidate();
+    m_recoveryFirstDirty.invalidate();
     m_store.clearRecoveryDraft();
+    recordFileStat(m_filePath);
 
     setModified(false);
     setStatus(tr("Saved"));
@@ -451,10 +574,9 @@ bool Backend::saveToPath(const QString &path, bool isSaveAs) {
     emit recentFilesChanged();
     emit documentChanged();
 
-    if (m_closeAfterSave) {
-        m_closeAfterSave = false;
-        m_closePending = false;
-        emit closeApproved();
+    if (m_resumePendingAfterSave) {
+        m_resumePendingAfterSave = false;
+        executePendingAction();
     }
     return true;
 }
@@ -462,7 +584,7 @@ bool Backend::saveToPath(const QString &path, bool isSaveAs) {
 bool Backend::revertToSaved() {
     if (m_filePath.isEmpty())
         return false;
-    return openFile(m_filePath);
+    return openFileNow(m_filePath);
 }
 
 void Backend::keepLocalVersion() {
@@ -486,22 +608,46 @@ void Backend::requestClose() {
         emit closeApproved();
         return;
     }
-    m_closePending = true;
+    m_pendingAction = PendingAction::Close;
+    m_pendingOpenPath.clear();
     emit unsavedChangesRequested();
 }
 
-void Backend::confirmDiscardAndClose() {
-    m_closePending = false;
-    m_closeAfterSave = false;
-    m_autoSaveTimer.stop();
-    m_recoveryTimer.stop();
-    m_store.clearRecoveryDraft();
-    setModified(false);
-    emit closeApproved();
+void Backend::executePendingAction() {
+    const PendingAction action = m_pendingAction;
+    const QString openPath = m_pendingOpenPath;
+    m_pendingAction = PendingAction::None;
+    m_pendingOpenPath.clear();
+
+    switch (action) {
+    case PendingAction::Close:
+        emit closeApproved();
+        break;
+    case PendingAction::OpenDialog:
+        openDialogNow();
+        break;
+    case PendingAction::OpenPath:
+        if (!openPath.isEmpty())
+            openFileNow(openPath);
+        break;
+    case PendingAction::None:
+        break;
+    }
 }
 
-void Backend::confirmSaveAndClose() {
-    m_closeAfterSave = true;
+void Backend::confirmDiscardAndProceed() {
+    m_resumePendingAfterSave = false;
+    m_autoSaveTimer.stop();
+    m_recoveryTimer.stop();
+    m_autoSaveFirstDirty.invalidate();
+    m_recoveryFirstDirty.invalidate();
+    m_store.clearRecoveryDraft();
+    setModified(false);
+    executePendingAction();
+}
+
+void Backend::confirmSaveAndProceed() {
+    m_resumePendingAfterSave = true;
     if (m_filePath.isEmpty()) {
         saveAsDialog();
     } else {
@@ -509,9 +655,10 @@ void Backend::confirmSaveAndClose() {
     }
 }
 
-void Backend::cancelPendingClose() {
-    m_closePending = false;
-    m_closeAfterSave = false;
+void Backend::cancelPendingAction() {
+    m_pendingAction = PendingAction::None;
+    m_pendingOpenPath.clear();
+    m_resumePendingAfterSave = false;
 }
 
 bool Backend::checkSizeDelta(int removeStart, int removeLen, const QString &replacement) {
@@ -603,7 +750,6 @@ QVariantMap Backend::handlePaste(int selStart, int selEnd) {
                 {QStringLiteral("selectionStart"), selStart},
                 {QStringLiteral("selectionEnd"), selEnd}};
 
-    // Each UTF-16 unit is at least one UTF-8 byte; reject oversized pastes upfront.
     if (text.size() > DocumentStore::kMaxFileBytes) {
         setStatus(tr("This document exceeds Gonzo's 16 MB limit."), true);
         return {{QStringLiteral("handled"), true},
@@ -632,8 +778,8 @@ void Backend::increaseTextSize() {
     if (next == m_fontSize)
         return;
     m_fontSize = next;
-    applyDocumentBaseTypography();
-    saveSettings();
+    applyZoomFont();
+    scheduleSaveSettings();
     emit typographyChanged();
 }
 
@@ -642,8 +788,8 @@ void Backend::decreaseTextSize() {
     if (next == m_fontSize)
         return;
     m_fontSize = next;
-    applyDocumentBaseTypography();
-    saveSettings();
+    applyZoomFont();
+    scheduleSaveSettings();
     emit typographyChanged();
 }
 
@@ -651,9 +797,58 @@ void Backend::resetTextSize() {
     if (m_fontSize == kDefaultFontSize)
         return;
     m_fontSize = kDefaultFontSize;
-    applyDocumentBaseTypography();
-    saveSettings();
+    applyZoomFont();
+    scheduleSaveSettings();
     emit typographyChanged();
+}
+
+void Backend::updateSearchMatchesForEdit(int position, int charsRemoved, int charsAdded) {
+    const int qLen = static_cast<int>(m_searchQuery.size());
+    if (qLen <= 0)
+        return;
+
+    const int delta = charsAdded - charsRemoved;
+    const int oldDirtyStart = std::max(0, position - qLen + 1);
+    const int oldDirtyEnd = position + charsRemoved + qLen;
+
+    QList<int> updated;
+    updated.reserve(m_searchMatches.size() + 4);
+    for (const int m : m_searchMatches) {
+        if (m < oldDirtyStart)
+            updated.append(m);
+        else if (m >= oldDirtyEnd)
+            updated.append(m + delta);
+    }
+
+    const int newWinStart = std::max(0, position - qLen + 1);
+    const int newWinEnd = std::min(static_cast<int>(m_cachedText.size()), position + charsAdded + qLen);
+    const QString window = m_cachedText.mid(newWinStart, newWinEnd - newWinStart);
+    qsizetype idx = 0;
+    while ((idx = window.indexOf(m_searchQuery, idx, Qt::CaseInsensitive)) >= 0) {
+        const int globalPos = newWinStart + static_cast<int>(idx);
+        // Only insert matches whose start falls inside the dirty zone to avoid duplicates.
+        if (globalPos >= oldDirtyStart && globalPos < position + charsAdded + qLen)
+            updated.append(globalPos);
+        idx += std::max(1, qLen);
+    }
+
+    std::sort(updated.begin(), updated.end());
+    updated.erase(std::unique(updated.begin(), updated.end()), updated.end());
+    m_searchMatches = std::move(updated);
+
+    if (m_searchMatches.isEmpty()) {
+        m_currentSearchIndex = -1;
+    } else if (m_currentSearchIndex < 0 || m_currentSearchIndex >= m_searchMatches.size()) {
+        m_currentSearchIndex = 0;
+    }
+
+    if (m_highlighter) {
+        const int curStart = (m_currentSearchIndex >= 0 && m_currentSearchIndex < m_searchMatches.size())
+            ? m_searchMatches.at(m_currentSearchIndex)
+            : -1;
+        m_highlighter->setSearch(m_searchQuery, curStart);
+    }
+    emit searchChanged();
 }
 
 void Backend::refreshSearchMatches(int anchorPos, bool keepIndex) {
@@ -806,7 +1001,7 @@ void Backend::toggleSpellCheck() {
     m_spellCheckEnabled = !m_spellCheckEnabled;
     if (m_highlighter)
         m_highlighter->setSpellChecker(m_spellChecker.get(), spellCheckEnabled());
-    saveSettings();
+    scheduleSaveSettings();
     emit spellCheckChanged();
     setStatus(spellCheckEnabled() ? tr("Spell check on") : tr("Spell check off"));
 }
@@ -862,13 +1057,17 @@ bool Backend::tryRecoverDraft() {
         return false;
 
     unwatchCurrentFile();
+    ++m_ioGeneration;
     m_filePath = draft->originalPath;
+    m_usesCrlf = draft->text.contains(QStringLiteral("\r\n"));
     m_recordedBaseline = draft->recordedBaseline;
     m_hasConflictBaseline = draft->hasConflictBaseline;
     m_baselineSha256 = draft->conflictBaseline;
     m_conflictPending = false;
     // Never auto-save a recovered draft over its original until explicitly saved.
     m_autoSaveSuspended = true;
+    if (!m_filePath.isEmpty())
+        recordFileStat(m_filePath);
 
     loadTextIntoDocument(draft->text);
     setModified(true);
@@ -897,12 +1096,64 @@ void Backend::retranslate() {
 }
 
 void Backend::handleAutoSaveTimer() {
+    m_autoSaveFirstDirty.invalidate();
     if (m_filePath.isEmpty() || !m_modified || m_autoSaveSuspended || m_conflictPending)
         return;
-    saveToPath(m_filePath, false);
+
+    // Snapshot immutable state on the UI thread, then hash and write atomically
+    // on a worker thread so large autosaves never block typing.
+    const QString targetPath = m_filePath;
+    const QByteArray bytes = serializedBytes();
+    const QByteArray baseline = m_hasConflictBaseline ? m_baselineSha256 : QByteArray();
+    const bool checkConflict = m_hasConflictBaseline;
+    const uint64_t ioGen = ++m_ioGeneration;
+    const uint64_t editRev = m_editRevision;
+    QPointer<Backend> self(this);
+
+    unwatchCurrentFile();
+    QThreadPool::globalInstance()->start([self, targetPath, bytes, baseline, checkConflict, ioGen, editRev] {
+        const WriteFileResult res = DocumentStore::writeFile(targetPath, bytes, baseline, checkConflict);
+        if (!self)
+            return;
+        QMetaObject::invokeMethod(self, [self, res, ioGen, editRev] {
+            if (!self || self->m_ioGeneration != ioGen)
+                return;
+            if (!res.ok) {
+                if (!self->m_filePath.isEmpty())
+                    self->watchCurrentFile();
+                if (res.conflict) {
+                    self->m_conflictPending = true;
+                    self->m_autoSaveSuspended = true;
+                    self->m_autoSaveTimer.stop();
+                    emit self->conflictChanged();
+                    self->setStatus(res.error, true);
+                    emit self->externalChangeDetected(false, self->m_modified);
+                } else {
+                    self->setStatus(res.error, true);
+                }
+                return;
+            }
+
+            self->m_baselineSha256 = res.sha256;
+            self->m_recordedBaseline = res.sha256;
+            self->m_hasConflictBaseline = true;
+            self->recordFileStat(self->m_filePath);
+            self->watchCurrentFile();
+
+            // Keep dirty state if further edits landed while the worker wrote.
+            if (self->m_editRevision == editRev) {
+                self->m_recoveryTimer.stop();
+                self->m_recoveryFirstDirty.invalidate();
+                self->m_store.clearRecoveryDraft();
+                self->setModified(false);
+                self->setStatus(tr("Saved"));
+            }
+        }, Qt::QueuedConnection);
+    });
 }
 
 void Backend::handleRecoveryTimer() {
+    m_recoveryFirstDirty.invalidate();
     if (!m_modified)
         return;
     m_store.writeRecoveryDraft(m_filePath, m_cachedText,
@@ -911,7 +1162,10 @@ void Backend::handleRecoveryTimer() {
 
 void Backend::flushAutoSaveNow() {
     m_autoSaveTimer.stop();
-    handleAutoSaveTimer();
+    m_autoSaveFirstDirty.invalidate();
+    if (m_filePath.isEmpty() || !m_modified || m_autoSaveSuspended || m_conflictPending)
+        return;
+    saveToPath(m_filePath, false);
 }
 
 void Backend::flushRecoveryNow() {
@@ -940,26 +1194,46 @@ void Backend::handleWatchedFileChanged() {
     if (m_filePath.isEmpty() || !m_hasConflictBaseline)
         return;
     watchCurrentFile();
-    bool deleted = false;
-    if (DocumentStore::diskMatchesBaseline(m_filePath, m_baselineSha256, &deleted))
-        return;
-    if (m_conflictPending)
-        return;
 
-    m_conflictPending = true;
-    m_autoSaveSuspended = true;
-    m_autoSaveTimer.stop();
-    emit conflictChanged();
-    setStatus(deleted
-                  ? tr("The file was moved or deleted outside Gonzo.")
-                  : tr("The file changed outside Gonzo."),
-              true);
-    emit externalChangeDetected(deleted, m_modified);
+    // Fast pre-check so unrelated edits to sibling files in the same folder
+    // never read or hash up to 16 MB on the UI thread.
+    const QFileInfo info(m_filePath);
+    if (info.exists() && m_knownFileSize >= 0 && m_knownFileMtimeMs >= 0
+        && info.size() == m_knownFileSize
+        && info.lastModified().toMSecsSinceEpoch() == m_knownFileMtimeMs) {
+        return;
+    }
+
+    const QString path = m_filePath;
+    const QByteArray baseline = m_baselineSha256;
+    const uint64_t ioGen = m_ioGeneration;
+    QPointer<Backend> self(this);
+
+    QThreadPool::globalInstance()->start([self, path, baseline, ioGen] {
+        bool deleted = false;
+        const bool matches = DocumentStore::diskMatchesBaseline(path, baseline, &deleted);
+        if (!self || matches)
+            return;
+        QMetaObject::invokeMethod(self, [self, deleted, ioGen] {
+            if (!self || self->m_ioGeneration != ioGen || self->m_conflictPending)
+                return;
+            self->m_conflictPending = true;
+            self->m_autoSaveSuspended = true;
+            self->m_autoSaveTimer.stop();
+            self->m_autoSaveFirstDirty.invalidate();
+            emit self->conflictChanged();
+            self->setStatus(deleted
+                                ? tr("The file was moved or deleted outside Gonzo.")
+                                : tr("The file changed outside Gonzo."),
+                            true);
+            emit self->externalChangeDetected(deleted, self->m_modified);
+        }, Qt::QueuedConnection);
+    });
 }
 
 void Backend::handlePickerOpenSelected(const QUrl &url) {
     if (url.isLocalFile())
-        openFile(url.toLocalFile());
+        openFileNow(url.toLocalFile());
 }
 
 void Backend::handlePickerSaveSelected(const QUrl &url) {
@@ -968,13 +1242,19 @@ void Backend::handlePickerSaveSelected(const QUrl &url) {
 }
 
 void Backend::handlePickerCancelled(bool forSave) {
-    if (forSave && m_closeAfterSave)
-        m_closeAfterSave = false;
+    if (forSave && m_resumePendingAfterSave) {
+        m_resumePendingAfterSave = false;
+        m_pendingAction = PendingAction::None;
+        m_pendingOpenPath.clear();
+    }
 }
 
 void Backend::handlePickerFailed(const QString &message, bool forSave) {
-    if (forSave && m_closeAfterSave)
-        m_closeAfterSave = false;
+    if (forSave && m_resumePendingAfterSave) {
+        m_resumePendingAfterSave = false;
+        m_pendingAction = PendingAction::None;
+        m_pendingOpenPath.clear();
+    }
     setStatus(message, true);
 }
 
@@ -994,7 +1274,11 @@ void Backend::loadSettings() {
         m_spellCheckEnabled = obj.value(QStringLiteral("spellCheckEnabled")).toBool(true);
 }
 
-void Backend::saveSettings() const {
+void Backend::scheduleSaveSettings() {
+    m_settingsSaveTimer.start();
+}
+
+void Backend::saveSettingsNow() const {
     QDir().mkpath(m_configDir);
     QJsonObject obj;
     obj.insert(QStringLiteral("fontSize"), m_fontSize);

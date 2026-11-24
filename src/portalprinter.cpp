@@ -6,6 +6,7 @@
 #include <QDBusPendingCallWatcher>
 #include <QDBusPendingReply>
 #include <QDBusUnixFileDescriptor>
+#include <QDir>
 #include <QFontDatabase>
 #include <QMarginsF>
 #include <QPageLayout>
@@ -125,7 +126,8 @@ void PortalPrinter::handlePrepareResponse(uint response, const QVariantMap &resu
 }
 
 void PortalPrinter::sendPdfToPortal(uint token) {
-    m_pdfFile = std::make_unique<QTemporaryFile>(QStringLiteral("gonzo-print-XXXXXX.pdf"));
+    m_pdfFile = std::make_unique<QTemporaryFile>(
+        QDir::tempPath() + QStringLiteral("/gonzo-print-XXXXXX.pdf"));
     if (!m_pdfFile->open() || !renderPdf(m_text, m_pdfFile.get())) {
         cleanup();
         emit printFailed(tr("Could not render PDF for printing."));

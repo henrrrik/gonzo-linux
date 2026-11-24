@@ -20,6 +20,9 @@ public:
     void setSpellChecker(const SpellChecker *checker, bool enabled);
     void setSearch(const QString &query, int currentMatchStart);
 
+    int highlightBlockCount() const { return m_highlightBlockCount; }
+    void resetHighlightBlockCount() { m_highlightBlockCount = 0; }
+
     static qreal headingScale(int level);
 
 protected:
@@ -52,4 +55,5 @@ private:
     bool m_spellCheckEnabled = false;
     QString m_searchQuery;
     int m_currentMatchStart = -1;
+    int m_highlightBlockCount = 0;
 };

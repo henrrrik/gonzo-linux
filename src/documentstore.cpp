@@ -300,10 +300,18 @@ std::optional<RecoveryDraft> DocumentStore::takeRecoverableDraft() {
 
         const ReadFileResult draftRead = readFile(entry.absoluteFilePath());
         if (!draftRead.ok) {
-            QFile::remove(entry.absoluteFilePath());
-            QFile::remove(dir.filePath(id + QStringLiteral(".json")));
-            lock->unlock();
-            QFile::remove(dir.filePath(id + QStringLiteral(".lock")));
+            // Only remove drafts that are genuinely missing or empty; preserve
+            // unreadable drafts (e.g. transient EACCES/EMFILE/EIO) so user data
+            // is never destroyed.
+            const QFileInfo draftInfo(entry.absoluteFilePath());
+            if (draftRead.notFound || (draftInfo.exists() && draftInfo.size() == 0)) {
+                QFile::remove(entry.absoluteFilePath());
+                QFile::remove(dir.filePath(id + QStringLiteral(".json")));
+                lock->unlock();
+                QFile::remove(dir.filePath(id + QStringLiteral(".lock")));
+            } else {
+                lock->unlock();
+            }
             continue;
         }
 

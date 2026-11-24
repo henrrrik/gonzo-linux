@@ -49,9 +49,25 @@ void MarkdownHighlighter::setSpellChecker(const SpellChecker *checker, bool enab
 void MarkdownHighlighter::setSearch(const QString &query, int currentMatchStart) {
     if (m_searchQuery == query && m_currentMatchStart == currentMatchStart)
         return;
+
+    const bool queryChanged = (m_searchQuery != query);
+    const int oldMatchStart = m_currentMatchStart;
     m_searchQuery = query;
     m_currentMatchStart = currentMatchStart;
-    rehighlight();
+
+    if (queryChanged || !document()) {
+        rehighlight();
+        return;
+    }
+
+    // Only the active match changed (e.g. Find Next/Prev or edit shifting an
+    // offset): re-highlight just the affected blocks instead of the whole doc.
+    const QTextBlock oldBlock = oldMatchStart >= 0 ? document()->findBlock(oldMatchStart) : QTextBlock();
+    const QTextBlock newBlock = currentMatchStart >= 0 ? document()->findBlock(currentMatchStart) : QTextBlock();
+    if (oldBlock.isValid())
+        rehighlightBlock(oldBlock);
+    if (newBlock.isValid() && newBlock != oldBlock)
+        rehighlightBlock(newBlock);
 }
 
 void MarkdownHighlighter::rebuildFormats() {
@@ -118,6 +134,7 @@ void MarkdownHighlighter::mergeFormat(int start, int length, const QTextCharForm
 }
 
 void MarkdownHighlighter::highlightBlock(const QString &text) {
+    ++m_highlightBlockCount;
     // 1. Markdown paragraph styling (bounded at 4,096 UTF-16 code units).
     if (!text.isEmpty() && text.size() <= Markdown::kMaxParagraphLength) {
         const QList<MarkdownSpan> spans = Markdown::paragraphSpans(text);

@@ -468,9 +468,9 @@ ApplicationWindow {
             primaryText: qsTr("Save")
             secondaryText: qsTr("Discard")
             cancelText: qsTr("Cancel")
-            onPrimaryClicked: backend.confirmSaveAndClose()
-            onSecondaryClicked: backend.confirmDiscardAndClose()
-            onCancelled: backend.cancelPendingClose()
+            onPrimaryClicked: backend.confirmSaveAndProceed()
+            onSecondaryClicked: backend.confirmDiscardAndProceed()
+            onCancelled: backend.cancelPendingAction()
         }
 
         ConfirmDialog {

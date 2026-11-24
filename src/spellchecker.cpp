@@ -4,6 +4,8 @@
 #include <QFileInfo>
 #include <QLocale>
 #include <QRegularExpression>
+#include <QStringDecoder>
+#include <QStringEncoder>
 #include <hunspell/hunspell.hxx>
 
 namespace {
@@ -65,6 +67,16 @@ void SpellChecker::setLanguage(const QString &languageCode) {
 void SpellChecker::loadDictionary(const QString &languageCode) {
     m_hunspell.reset();
     m_dictionaryName.clear();
+    m_dictEncoding = "UTF-8";
+
+    auto initHunspell = [this](const QString &aff, const QString &dic, const QString &name) {
+        m_hunspell = std::make_unique<Hunspell>(
+            QFile::encodeName(aff).constData(),
+            QFile::encodeName(dic).constData());
+        m_dictionaryName = name;
+        const std::string enc = m_hunspell->get_dict_encoding();
+        m_dictEncoding = !enc.empty() ? QByteArray(enc.data(), static_cast<qsizetype>(enc.size())) : QByteArray("UTF-8");
+    };
 
     const QStringList candidates = candidateDictionaryNames(languageCode);
     for (const QString &name : candidates) {
@@ -72,10 +84,7 @@ void SpellChecker::loadDictionary(const QString &languageCode) {
             const QString aff = dirPath + QLatin1Char('/') + name + QStringLiteral(".aff");
             const QString dic = dirPath + QLatin1Char('/') + name + QStringLiteral(".dic");
             if (QFileInfo::exists(aff) && QFileInfo::exists(dic)) {
-                m_hunspell = std::make_unique<Hunspell>(
-                    QFile::encodeName(aff).constData(),
-                    QFile::encodeName(dic).constData());
-                m_dictionaryName = name;
+                initHunspell(aff, dic, name);
                 return;
             }
         }
@@ -92,14 +101,30 @@ void SpellChecker::loadDictionary(const QString &languageCode) {
             const QString aff = dir.filePath(affFile);
             const QString dic = dir.filePath(base + QStringLiteral(".dic"));
             if (QFileInfo::exists(dic)) {
-                m_hunspell = std::make_unique<Hunspell>(
-                    QFile::encodeName(aff).constData(),
-                    QFile::encodeName(dic).constData());
-                m_dictionaryName = base;
+                initHunspell(aff, dic, base);
                 return;
             }
         }
     }
+}
+
+std::string SpellChecker::encodeWord(const QString &word) const {
+    if (m_dictEncoding.compare("UTF-8", Qt::CaseInsensitive) == 0)
+        return word.toStdString();
+    QStringEncoder encoder(m_dictEncoding.constData());
+    if (!encoder.isValid())
+        return word.toStdString();
+    const QByteArray bytes = encoder.encode(word);
+    return std::string(bytes.constData(), static_cast<size_t>(bytes.size()));
+}
+
+QString SpellChecker::decodeWord(const std::string &bytes) const {
+    if (m_dictEncoding.compare("UTF-8", Qt::CaseInsensitive) == 0)
+        return QString::fromUtf8(bytes.c_str(), static_cast<qsizetype>(bytes.size()));
+    QStringDecoder decoder(m_dictEncoding.constData());
+    if (!decoder.isValid())
+        return QString::fromUtf8(bytes.c_str(), static_cast<qsizetype>(bytes.size()));
+    return decoder.decode(QByteArrayView(bytes.data(), static_cast<qsizetype>(bytes.size())));
 }
 
 bool SpellChecker::isMisspelled(const QString &word) const {
@@ -110,17 +135,17 @@ bool SpellChecker::isMisspelled(const QString &word) const {
         if (ch.isDigit())
             return false;
     }
-    return !m_hunspell->spell(word.toStdString());
+    return !m_hunspell->spell(encodeWord(word));
 }
 
 QStringList SpellChecker::suggestions(const QString &word, int maxSuggestions) const {
     if (!m_hunspell || word.isEmpty())
         return {};
-    const std::vector<std::string> raw = m_hunspell->suggest(word.toStdString());
+    const std::vector<std::string> raw = m_hunspell->suggest(encodeWord(word));
     QStringList out;
     out.reserve(std::min<int>(static_cast<int>(raw.size()), maxSuggestions));
     for (const std::string &s : raw) {
-        out.append(QString::fromUtf8(s.c_str(), static_cast<qsizetype>(s.size())));
+        out.append(decodeWord(s));
         if (out.size() >= maxSuggestions)
             break;
     }
@@ -132,7 +157,7 @@ void SpellChecker::ignoreWord(const QString &word) {
         return;
     m_ignored.insert(word);
     if (m_hunspell)
-        m_hunspell->add(word.toStdString());
+        m_hunspell->add(encodeWord(word));
 }
 
 QList<TextRange> SpellChecker::misspelledRanges(const QString &paragraph) const {

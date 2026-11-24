@@ -68,9 +68,14 @@ int runStats(const QStringList &args, QString *out, QString *err) {
     }
 
     int paragraphs = 0;
-    for (const QString &line : read.text.split(QLatin1Char('\n'))) {
-        if (!line.trimmed().isEmpty())
+    bool inParagraph = false;
+    for (const QString &line : EditorCommands::normalize(read.text).split(QLatin1Char('\n'))) {
+        if (line.trimmed().isEmpty()) {
+            inParagraph = false;
+        } else if (!inParagraph) {
             ++paragraphs;
+            inParagraph = true;
+        }
     }
 
     if (json) {

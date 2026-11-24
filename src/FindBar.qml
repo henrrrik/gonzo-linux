@@ -31,7 +31,14 @@ Rectangle {
     }
 
     function setQueryText(q) {
+        queryDebounce.stop()
         findField.text = q
+    }
+
+    Timer {
+        id: queryDebounce
+        interval: 150
+        onTriggered: bar.queryChanged(findField.text)
     }
 
     ColumnLayout {
@@ -52,8 +59,12 @@ Rectangle {
                 font.family: backend.fontFamily
                 font.pixelSize: 12
                 color: theme.foreground
-                onTextEdited: bar.queryChanged(text)
+                onTextEdited: queryDebounce.restart()
                 Keys.onReturnPressed: function(event) {
+                    if (queryDebounce.running) {
+                        queryDebounce.stop()
+                        bar.queryChanged(text)
+                    }
                     if (event.modifiers & Qt.ShiftModifier)
                         bar.findPreviousRequested()
                     else

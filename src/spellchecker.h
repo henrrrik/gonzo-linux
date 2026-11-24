@@ -35,9 +35,12 @@ public:
 
 private:
     void loadDictionary(const QString &languageCode);
+    std::string encodeWord(const QString &word) const;
+    QString decodeWord(const std::string &bytes) const;
 
     QStringList m_searchDirs;
     QString m_dictionaryName;
+    QByteArray m_dictEncoding;
     std::unique_ptr<Hunspell> m_hunspell;
     QSet<QString> m_ignored;
 };

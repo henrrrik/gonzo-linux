@@ -104,4 +104,6 @@ private:
     QPointer<QQuickWindow> m_window;
     qreal m_stepPixels = 120.0;
     bool m_debugScroll = false;
+    qreal m_zoomAccum = 0.0;
+    qint64 m_lastZoomMs = -1;
 };

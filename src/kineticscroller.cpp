@@ -178,11 +178,28 @@ bool KineticScroller::eventFilter(QObject *watched, QEvent *event) {
         return QObject::eventFilter(watched, event);
 
     if (wheel->modifiers() & Qt::ControlModifier) {
-        const qreal delta = wheel->angleDelta().y() != 0
-            ? wheel->angleDelta().y()
-            : wheel->pixelDelta().y();
-        if (delta != 0.0)
-            emit zoomRequested(delta > 0.0 ? 1 : -1);
+        const qint64 nowMs = m_clock.elapsed();
+        if (wheel->phase() == Qt::ScrollBegin || wheel->phase() == Qt::ScrollEnd
+            || (m_lastZoomMs >= 0 && nowMs - m_lastZoomMs > 250)) {
+            m_zoomAccum = 0.0;
+        }
+        m_lastZoomMs = nowMs;
+
+        // Discrete mouse wheel reports ±120 angleDelta per notch; precision
+        // touchpads emit small per-frame pixelDelta values. Accumulate both so
+        // one touchpad gesture steps smoothly instead of jumping per frame.
+        const qreal delta = wheel->pixelDelta().y() != 0
+            ? wheel->pixelDelta().y() * 2.0
+            : static_cast<qreal>(wheel->angleDelta().y());
+        m_zoomAccum += delta;
+        while (m_zoomAccum >= 120.0) {
+            m_zoomAccum -= 120.0;
+            emit zoomRequested(1);
+        }
+        while (m_zoomAccum <= -120.0) {
+            m_zoomAccum += 120.0;
+            emit zoomRequested(-1);
+        }
         wheel->accept();
         return true;
     }

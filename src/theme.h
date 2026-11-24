@@ -3,7 +3,9 @@
 #include <QFileSystemWatcher>
 #include <QObject>
 #include <QProcess>
+#include <QSocketNotifier>
 #include <QTimer>
+#include <memory>
 
 class QDBusVariant;
 
@@ -58,6 +60,8 @@ private slots:
 private:
     void reload();
     void refreshRounding();
+    void connectHyprlandEventSocket();
+    void handleHyprlandEventSocket();
     bool detectPortalDarkMode(bool *known) const;
 
     QString m_directory;
@@ -82,4 +86,7 @@ private:
     QProcess m_roundingProcess;
     QTimer m_roundingPoll;
     QTimer m_roundingTimeout;
+    int m_hyprEventFd = -1;
+    std::unique_ptr<QSocketNotifier> m_hyprEventNotifier;
+    QByteArray m_hyprEventBuffer;
 };
