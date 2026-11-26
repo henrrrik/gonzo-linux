@@ -57,7 +57,7 @@ void PortalPrinter::printMarkdownSource(const QString &title, const QString &tex
     ++m_generation;
     const int gen = m_generation;
 
-    const QString token = QStringLiteral("gonzo_prep_") + QUuid::createUuid().toString(QUuid::Id128);
+    const QString token = QStringLiteral("gonzo_writer_prep_") + QUuid::createUuid().toString(QUuid::Id128);
     QVariantMap options;
     options.insert(QStringLiteral("handle_token"), token);
     options.insert(QStringLiteral("modal"), true);
@@ -127,7 +127,7 @@ void PortalPrinter::handlePrepareResponse(uint response, const QVariantMap &resu
 
 void PortalPrinter::sendPdfToPortal(uint token) {
     m_pdfFile = std::make_unique<QTemporaryFile>(
-        QDir::tempPath() + QStringLiteral("/gonzo-print-XXXXXX.pdf"));
+        QDir::tempPath() + QStringLiteral("/gonzo-writer-print-XXXXXX.pdf"));
     if (!m_pdfFile->open() || !renderPdf(m_text, m_pdfFile.get())) {
         cleanup();
         emit printFailed(tr("Could not render PDF for printing."));
@@ -140,7 +140,7 @@ void PortalPrinter::sendPdfToPortal(uint token) {
     ++m_generation;
     const int gen = m_generation;
 
-    const QString handleToken = QStringLiteral("gonzo_print_") + QUuid::createUuid().toString(QUuid::Id128);
+    const QString handleToken = QStringLiteral("gonzo_writer_print_") + QUuid::createUuid().toString(QUuid::Id128);
     QVariantMap options;
     options.insert(QStringLiteral("handle_token"), handleToken);
     options.insert(QStringLiteral("token"), token);

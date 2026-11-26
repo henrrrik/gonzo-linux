@@ -554,7 +554,7 @@ private slots:
         QVERIFY(writeBytes(doc, "# Story\n\nHello [world](https://example.com)!\n"));
 
         QString out, err;
-        QCOMPARE(Cli::run({QStringLiteral("gonzo"), QStringLiteral("stats"), QStringLiteral("--json"), doc}, &out, &err), 0);
+        QCOMPARE(Cli::run({QStringLiteral("gonzo-writer"), QStringLiteral("stats"), QStringLiteral("--json"), doc}, &out, &err), 0);
         const QJsonObject stats = QJsonDocument::fromJson(out.toUtf8()).object();
         QCOMPARE(stats.value(QStringLiteral("ok")).toBool(), true);
         QCOMPARE(stats.value(QStringLiteral("words")).toInt(), 3);
@@ -562,22 +562,22 @@ private slots:
         QCOMPARE(stats.value(QStringLiteral("links")).toInt(), 1);
 
         out.clear(); err.clear();
-        QCOMPARE(Cli::run({QStringLiteral("gonzo"), QStringLiteral("check"), QStringLiteral("--json"), doc}, &out, &err), 0);
+        QCOMPARE(Cli::run({QStringLiteral("gonzo-writer"), QStringLiteral("check"), QStringLiteral("--json"), doc}, &out, &err), 0);
         QCOMPARE(QJsonDocument::fromJson(out.toUtf8()).object().value(QStringLiteral("ok")).toBool(), true);
 
         out.clear(); err.clear();
         const QString paraDoc = dir.filePath(QStringLiteral("paras.md"));
         QVERIFY(writeBytes(paraDoc, "line one\nline two\n\nsecond paragraph\r\ncontinued\n\n\nthird\n"));
-        QCOMPARE(Cli::run({QStringLiteral("gonzo"), QStringLiteral("stats"), QStringLiteral("--json"), paraDoc}, &out, &err), 0);
+        QCOMPARE(Cli::run({QStringLiteral("gonzo-writer"), QStringLiteral("stats"), QStringLiteral("--json"), paraDoc}, &out, &err), 0);
         const QJsonObject paraStats = QJsonDocument::fromJson(out.toUtf8()).object();
         QCOMPARE(paraStats.value(QStringLiteral("paragraphs")).toInt(), 3);
 
         const QString fakeHome = dir.filePath(QStringLiteral("home"));
         QDir().mkpath(fakeHome + QStringLiteral("/.claude"));
         out.clear(); err.clear();
-        QCOMPARE(Cli::run({QStringLiteral("gonzo"), QStringLiteral("skill"), QStringLiteral("install")}, &out, &err, fakeHome), 0);
-        QVERIFY(QFileInfo::exists(fakeHome + QStringLiteral("/.agents/skills/gonzo/SKILL.md")));
-        QVERIFY(QFileInfo(fakeHome + QStringLiteral("/.claude/skills/gonzo")).isSymLink());
+        QCOMPARE(Cli::run({QStringLiteral("gonzo-writer"), QStringLiteral("skill"), QStringLiteral("install")}, &out, &err, fakeHome), 0);
+        QVERIFY(QFileInfo::exists(fakeHome + QStringLiteral("/.agents/skills/gonzo-writer/SKILL.md")));
+        QVERIFY(QFileInfo(fakeHome + QStringLiteral("/.claude/skills/gonzo-writer")).isSymLink());
     }
 
     // --- Review regression tests ---

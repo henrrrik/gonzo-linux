@@ -40,22 +40,22 @@ Return inserts a paragraph break (`\n\n`), continues lists and blockquotes, and 
 
 ## Command Line
 
-Headless commands run without a display server and support `--json`:
+Headless commands run without a display server and support `--json` (the package and binary are named `gonzo-writer` to avoid colliding with the `gonzo` log TUI):
 
 ```sh
-gonzo [file]                        # Open the editor (or start a new file)
-gonzo open [file]                   # Explicit GUI open
-gonzo stats [--json] <file>         # Word, paragraph, heading, link, and byte counts
-gonzo check [--json] [--spell] <file>  # Validate UTF-8, 16 MB limit, and optional spelling
-gonzo skill [install]               # Print or install the bundled agent skill
+gonzo-writer [file]                        # Open the editor (or start a new file)
+gonzo-writer open [file]                   # Explicit GUI open
+gonzo-writer stats [--json] <file>         # Word, paragraph, heading, link, and byte counts
+gonzo-writer check [--json] [--spell] <file>  # Validate UTF-8, 16 MB limit, and optional spelling
+gonzo-writer skill [install]               # Print or install the bundled agent skill
 ```
 
 ## Build, Test, and Install
 
 ```sh
-./bin/build     # qmake6 + make into build/gonzo
+./bin/build     # qmake6 + make into build/gonzo-writer
 ./bin/test      # build and run Qt Test suite offscreen
-./bin/install   # build and install Arch package via makepkg -fsi
+./bin/install   # build and install Arch package (gonzo-writer) via makepkg -fsi
 ```
 
 ## Scope

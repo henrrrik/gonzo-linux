@@ -31,7 +31,7 @@ int runStats(const QStringList &args, QString *out, QString *err) {
         if (args.at(i) == QStringLiteral("--json"))
             json = true;
         else if (args.at(i) == QStringLiteral("--help") || args.at(i) == QStringLiteral("-h")) {
-            emitLine(QStringLiteral("Usage: gonzo stats [--json] <file>"), stdout, out);
+            emitLine(QStringLiteral("Usage: gonzo-writer stats [--json] <file>"), stdout, out);
             return 0;
         } else if (args.at(i).startsWith(QLatin1Char('-'))) {
             emitLine(QStringLiteral("Unknown option: %1").arg(args.at(i)), stderr, err);
@@ -42,7 +42,7 @@ int runStats(const QStringList &args, QString *out, QString *err) {
     }
 
     if (filePath.isEmpty()) {
-        emitLine(QStringLiteral("Usage: gonzo stats [--json] <file>"), stderr, err);
+        emitLine(QStringLiteral("Usage: gonzo-writer stats [--json] <file>"), stderr, err);
         return 1;
     }
 
@@ -113,7 +113,7 @@ int runCheck(const QStringList &args, QString *out, QString *err) {
         else if (args.at(i) == QStringLiteral("--spell"))
             spell = true;
         else if (args.at(i) == QStringLiteral("--help") || args.at(i) == QStringLiteral("-h")) {
-            emitLine(QStringLiteral("Usage: gonzo check [--json] [--spell] <file>"), stdout, out);
+            emitLine(QStringLiteral("Usage: gonzo-writer check [--json] [--spell] <file>"), stdout, out);
             return 0;
         } else if (args.at(i).startsWith(QLatin1Char('-'))) {
             emitLine(QStringLiteral("Unknown option: %1").arg(args.at(i)), stderr, err);
@@ -124,7 +124,7 @@ int runCheck(const QStringList &args, QString *out, QString *err) {
     }
 
     if (filePath.isEmpty()) {
-        emitLine(QStringLiteral("Usage: gonzo check [--json] [--spell] <file>"), stderr, err);
+        emitLine(QStringLiteral("Usage: gonzo-writer check [--json] [--spell] <file>"), stderr, err);
         return 1;
     }
 
@@ -204,12 +204,12 @@ int runSkill(const QStringList &args, QString *out, QString *err, const QString 
         return 0;
     }
     if (sub != QStringLiteral("install")) {
-        emitLine(QStringLiteral("Use `gonzo skill` to print the skill, or `gonzo skill install`."), stderr, err);
+        emitLine(QStringLiteral("Use `gonzo-writer skill` to print the skill, or `gonzo-writer skill install`."), stderr, err);
         return 1;
     }
 
     const QDir home(homeOverride.isEmpty() ? QDir::homePath() : homeOverride);
-    const QString directory = home.filePath(QStringLiteral(".agents/skills/gonzo"));
+    const QString directory = home.filePath(QStringLiteral(".agents/skills/gonzo-writer"));
     QSaveFile file(directory + QStringLiteral("/SKILL.md"));
     if (!QDir().mkpath(directory) || !file.open(QIODevice::WriteOnly)
         || file.write(text) != text.size() || !file.commit()) {
@@ -221,7 +221,7 @@ int runSkill(const QStringList &args, QString *out, QString *err, const QString 
     if (!home.exists(QStringLiteral(".claude")))
         return 0;
 
-    const QString link = home.filePath(QStringLiteral(".claude/skills/gonzo"));
+    const QString link = home.filePath(QStringLiteral(".claude/skills/gonzo-writer"));
     const QFileInfo existing(link);
     if (existing.isSymLink())
         QFile::remove(link);
@@ -230,7 +230,7 @@ int runSkill(const QStringList &args, QString *out, QString *err, const QString 
         return 1;
     }
     if (!home.mkpath(QStringLiteral(".claude/skills"))
-        || !QFile::link(QStringLiteral("../../.agents/skills/gonzo"), link)) {
+        || !QFile::link(QStringLiteral("../../.agents/skills/gonzo-writer"), link)) {
         emitLine(QStringLiteral("Could not link %1").arg(link), stderr, err);
         return 1;
     }
@@ -258,12 +258,12 @@ bool isCliCommand(const QStringList &arguments) {
 
 QString usageText() {
     return QStringLiteral(
-        "Usage: gonzo [file]\n"
-        "       gonzo open [file]\n"
-        "       gonzo stats [--json] <file>\n"
-        "       gonzo check [--json] [--spell] <file>\n"
-        "       gonzo skill [install]\n"
-        "       gonzo --version | --help");
+        "Usage: gonzo-writer [file]\n"
+        "       gonzo-writer open [file]\n"
+        "       gonzo-writer stats [--json] <file>\n"
+        "       gonzo-writer check [--json] [--spell] <file>\n"
+        "       gonzo-writer skill [install]\n"
+        "       gonzo-writer --version | --help");
 }
 
 int run(const QStringList &arguments, QString *stdoutOut, QString *stderrOut,
@@ -274,7 +274,7 @@ int run(const QStringList &arguments, QString *stdoutOut, QString *stderrOut,
         return 0;
     }
     if (cmd == QStringLiteral("-v") || cmd == QStringLiteral("--version")) {
-        emitLine(QStringLiteral("gonzo 0.1.0"), stdout, stdoutOut);
+        emitLine(QStringLiteral("gonzo-writer 0.1.0"), stdout, stdoutOut);
         return 0;
     }
     if (cmd == QStringLiteral("stats"))

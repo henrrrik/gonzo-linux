@@ -129,7 +129,7 @@ void PortalFilePicker::requestFile(const QString &method, const QString &title,
         return;
     }
 
-    const QString token = QStringLiteral("gonzo_") + QUuid::createUuid().toString(QUuid::Id128);
+    const QString token = QStringLiteral("gonzo_writer_") + QUuid::createUuid().toString(QUuid::Id128);
     options.insert(QStringLiteral("handle_token"), token);
 
     const QString sender = m_bus.baseService().mid(1).replace(QLatin1Char('.'), QLatin1Char('_'));

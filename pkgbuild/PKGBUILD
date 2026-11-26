@@ -1,4 +1,4 @@
-pkgname=gonzo
+pkgname=gonzo-writer
 pkgver=0.1.0
 pkgrel=1
 pkgdesc='A fast, distraction-free Markdown writing app for Omarchy'
@@ -16,8 +16,8 @@ build() {
 
 package() {
   cd "$startdir/.."
-  install -Dm755 build/gonzo "$pkgdir/usr/bin/gonzo"
+  install -Dm755 build/gonzo-writer "$pkgdir/usr/bin/gonzo-writer"
   install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
-  install -Dm644 "$startdir/gonzo.svg" "$pkgdir/usr/share/icons/hicolor/scalable/apps/gonzo.svg"
-  install -Dm644 "$startdir/gonzo.desktop" "$pkgdir/usr/share/applications/gonzo.desktop"
+  install -Dm644 "$startdir/gonzo-writer.svg" "$pkgdir/usr/share/icons/hicolor/scalable/apps/gonzo-writer.svg"
+  install -Dm644 "$startdir/gonzo-writer.desktop" "$pkgdir/usr/share/applications/gonzo-writer.desktop"
 }

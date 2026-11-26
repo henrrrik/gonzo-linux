@@ -5,11 +5,11 @@
 #include <optional>
 
 // Headless CLI commands for scripts and agents:
-//   gonzo --help | --version
-//   gonzo open [file]
-//   gonzo stats [--json] <file>
-//   gonzo check [--json] [--spell] <file>
-//   gonzo skill [install]
+//   gonzo-writer --help | --version
+//   gonzo-writer open [file]
+//   gonzo-writer stats [--json] <file>
+//   gonzo-writer check [--json] [--spell] <file>
+//   gonzo-writer skill [install]
 namespace Cli {
 bool isCliCommand(const QStringList &arguments);
 QString usageText();

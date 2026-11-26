@@ -109,8 +109,8 @@ DocumentStore::~DocumentStore() {
 QString DocumentStore::defaultStateDirectory() {
     const QString xdgState = qEnvironmentVariable("XDG_STATE_HOME");
     if (!xdgState.isEmpty())
-        return xdgState + QStringLiteral("/gonzo");
-    return QDir::homePath() + QStringLiteral("/.local/state/gonzo");
+        return xdgState + QStringLiteral("/gonzo-writer");
+    return QDir::homePath() + QStringLiteral("/.local/state/gonzo-writer");
 }
 
 QString DocumentStore::resolveTargetPath(const QString &path) {

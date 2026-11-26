@@ -1,4 +1,4 @@
-// gonzo — distraction-free Markdown writing for Omarchy.
+// gonzo-writer — distraction-free Markdown writing for Omarchy.
 
 #include <QGuiApplication>
 #include <QIcon>
@@ -25,19 +25,19 @@ int main(int argc, char *argv[]) {
     if (Cli::isCliCommand(rawArgs)) {
         qputenv("QT_QPA_PLATFORM", "offscreen");
         QCoreApplication cliApp(argc, argv);
-        cliApp.setApplicationName(QStringLiteral("gonzo"));
+        cliApp.setApplicationName(QStringLiteral("gonzo-writer"));
         cliApp.setApplicationVersion(QStringLiteral("0.1.0"));
         return Cli::run(cliApp.arguments());
     }
 
     QGuiApplication app(argc, argv);
-    app.setApplicationName(QStringLiteral("gonzo"));
+    app.setApplicationName(QStringLiteral("gonzo-writer"));
     app.setApplicationVersion(QStringLiteral("0.1.0"));
 
-    // Matches the window to gonzo.desktop so Wayland (app_id) and the Omarchy
-    // launcher pick up the installed icon.
-    app.setDesktopFileName(QStringLiteral("gonzo"));
-    app.setWindowIcon(QIcon::fromTheme(QStringLiteral("gonzo")));
+    // Matches the window to gonzo-writer.desktop so Wayland (app_id) and the
+    // Omarchy launcher pick up the installed icon.
+    app.setDesktopFileName(QStringLiteral("gonzo-writer"));
+    app.setWindowIcon(QIcon::fromTheme(QStringLiteral("gonzo-writer")));
 
     QQuickStyle::setStyle(QStringLiteral("Material"));
 

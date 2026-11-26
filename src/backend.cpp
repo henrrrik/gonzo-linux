@@ -56,8 +56,8 @@ Backend::Backend(Theme *theme, FilePicker *filePicker, Printer *printer,
       m_store(stateDirectory),
       m_configDir(configDirectory.isEmpty()
                       ? (qEnvironmentVariableIsEmpty("XDG_CONFIG_HOME")
-                             ? QDir::homePath() + QStringLiteral("/.config/gonzo")
-                             : qEnvironmentVariable("XDG_CONFIG_HOME") + QStringLiteral("/gonzo"))
+                             ? QDir::homePath() + QStringLiteral("/.config/gonzo-writer")
+                             : qEnvironmentVariable("XDG_CONFIG_HOME") + QStringLiteral("/gonzo-writer"))
                       : configDirectory),
       m_spellChecker(std::make_unique<SpellChecker>(QString(), spellSearchDirs)),
       m_statusText(tr("Markdown")) {

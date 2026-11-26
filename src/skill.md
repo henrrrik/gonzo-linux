@@ -1,5 +1,5 @@
 ---
-name: gonzo
+name: gonzo-writer
 description: >
   Inspect, validate, and open Markdown documents with Gonzo, Omarchy's
   distraction-free Markdown writing app. Use when asked to check Markdown
@@ -9,16 +9,16 @@ description: >
 
 # Gonzo CLI
 
-Gonzo runs headless commands without a display and launches the editor GUI
-when given a file or `open`.
+Gonzo (`gonzo-writer`) runs headless commands without a display and launches
+the editor GUI when given a file or `open`.
 
 ## Commands
 
-- `gonzo [file]` or `gonzo open [file]` — Open the editor window (optionally on `file`).
-- `gonzo stats [--json] <file>` — Report word count, characters, UTF-8 bytes, paragraphs, headings, and links.
-- `gonzo check [--json] [--spell] <file>` — Validate that `file` is a regular local UTF-8 file within Gonzo's 16 MB limit; with `--spell`, also report Hunspell misspellings outside inline code spans and link destinations.
-- `gonzo skill` — Print this skill.
-- `gonzo skill install` — Install this skill to `~/.agents/skills/gonzo/SKILL.md`.
+- `gonzo-writer [file]` or `gonzo-writer open [file]` — Open the editor window (optionally on `file`).
+- `gonzo-writer stats [--json] <file>` — Report word count, characters, UTF-8 bytes, paragraphs, headings, and links.
+- `gonzo-writer check [--json] [--spell] <file>` — Validate that `file` is a regular local UTF-8 file within Gonzo's 16 MB limit; with `--spell`, also report Hunspell misspellings outside inline code spans and link destinations.
+- `gonzo-writer skill` — Print this skill.
+- `gonzo-writer skill install` — Install this skill to `~/.agents/skills/gonzo-writer/SKILL.md`.
 
 ## Exit codes
 
