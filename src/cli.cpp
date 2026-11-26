@@ -274,7 +274,7 @@ int run(const QStringList &arguments, QString *stdoutOut, QString *stderrOut,
         return 0;
     }
     if (cmd == QStringLiteral("-v") || cmd == QStringLiteral("--version")) {
-        emitLine(QStringLiteral("gonzo-writer 0.1.0"), stdout, stdoutOut);
+        emitLine(QStringLiteral("gonzo-writer 0.2.0"), stdout, stdoutOut);
         return 0;
     }
     if (cmd == QStringLiteral("stats"))

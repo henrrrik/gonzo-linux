@@ -26,13 +26,13 @@ int main(int argc, char *argv[]) {
         qputenv("QT_QPA_PLATFORM", "offscreen");
         QCoreApplication cliApp(argc, argv);
         cliApp.setApplicationName(QStringLiteral("gonzo-writer"));
-        cliApp.setApplicationVersion(QStringLiteral("0.1.0"));
+        cliApp.setApplicationVersion(QStringLiteral("0.2.0"));
         return Cli::run(cliApp.arguments());
     }
 
     QGuiApplication app(argc, argv);
     app.setApplicationName(QStringLiteral("gonzo-writer"));
-    app.setApplicationVersion(QStringLiteral("0.1.0"));
+    app.setApplicationVersion(QStringLiteral("0.2.0"));
 
     // Matches the window to gonzo-writer.desktop so Wayland (app_id) and the
     // Omarchy launcher pick up the installed icon.
